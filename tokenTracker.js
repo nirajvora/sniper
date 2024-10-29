@@ -1,4 +1,4 @@
-class TokenTracker {
+export default class TokenTracker {
     constructor() {
         this.activeTokens = new Map();
         this.ws = null;
@@ -19,6 +19,8 @@ class TokenTracker {
                 this.activeTokens.set(tokenMint, {
                     creationEvent: tokenCreationEvent,
                     subscription: tradeSubscription,
+                    name: tokenCreationEvent.name,
+                    symbol: tokenCreationEvent.symbol,
                     trades: [],
                     metrics: {
                         initialSolInCurve: tokenCreationEvent.vSolInBondingCurve,
@@ -56,7 +58,7 @@ class TokenTracker {
         // Create subscription message for specific token
         const subscriptionPayload = {
             method: "subscribeTokenTrade",
-            token: tokenMint
+            keys: [tokenMint]
         };
 
         // Send subscription request
@@ -67,7 +69,7 @@ class TokenTracker {
             unsubscribe: () => {
                 const unsubscribePayload = {
                     method: "unsubscribeTokenTrade",
-                    token: tokenMint
+                    keys: [tokenMint]
                 };
                 this.ws.send(JSON.stringify(unsubscribePayload));
                 console.log(`Unsubscribed from token trades: ${tokenMint}`);
@@ -211,5 +213,3 @@ class TokenTracker {
         }
     }
 }
-
-module.exports = TokenTracker;

@@ -1,7 +1,7 @@
 import WebSocket from 'ws';
+import TokenTracker from './tokenTracker.js';
 
 // Initialize TokenTracker for managing state
-const TokenTracker = require('./tokenTracker.js');
 const tt = new TokenTracker();
 
 // Create WebSocket connection
