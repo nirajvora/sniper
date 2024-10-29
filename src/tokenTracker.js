@@ -1,12 +1,18 @@
 export default class TokenTracker {
     constructor() {
         this.activeTokens = new Map();
-        this.ws = null;
+        this.pumpWs = null;
+        this.broadcastToUI = null;
         // Thresholds for analysis
         this.VOLUME_THRESHOLD = 1000000; // Example token amount
         this.SOL_LIQUIDITY_THRESHOLD = 50; // SOL
         this.TRADE_COUNT_THRESHOLD = 20; // Number of trades
         this.TIME_WINDOW = 1000 * 60 * 60; // 1 hour in milliseconds
+
+        // Broadcast state periodically
+        setInterval(() => {
+            this.broadcastState();
+        }, 1000); // Update UI every second
     }
 
     async handleNewToken(tokenCreationEvent) {
@@ -51,7 +57,7 @@ export default class TokenTracker {
     }
 
     async subscribeToTokenTrades(tokenMint) {
-        if (!this.ws) {
+        if (!this.pumpWs) {
             throw new Error('WebSocket connection not initialized');
         }
 
@@ -62,7 +68,7 @@ export default class TokenTracker {
         };
 
         // Send subscription request
-        this.ws.send(JSON.stringify(subscriptionPayload));
+        this.pumpWs.send(JSON.stringify(subscriptionPayload));
 
         // Return an object with unsubscribe method
         return {
@@ -78,7 +84,7 @@ export default class TokenTracker {
     }
 
     async reconnectSubscriptions() {
-        if (!this.ws) {
+        if (!this.pumpWs) {
             throw new Error('WebSocket connection not initialized');
         }
 
@@ -93,8 +99,32 @@ export default class TokenTracker {
         }
     }
 
-    setWebSocket(ws) {
-        this.ws = ws;
+    setPumpWebSocket(ws) {
+        this.pumpWs = ws;
+    }
+
+    setBroadcastFunction(broadcastFn) {
+        this.broadcastToUI = broadcastFn;
+    }
+
+    broadcastState() {
+        if (!this.broadcastToUI) return;
+
+        const state = Array.from(this.activeTokens.entries()).map(([mint, data]) => ({
+            mint,
+            symbol: data.creationEvent?.symbol || 'Unknown',
+            metrics: {
+                buyCount: data.metrics.buyCount,
+                sellCount: data.metrics.sellCount,
+                totalVolumeTokens: data.metrics.totalVolumeTokens,
+                uniqueTraders: data.metrics.uniqueTraders.size,
+                marketCap: data.metrics.highestMarketCap,
+                priceGrowth: this.calculatePriceGrowth(data.metrics.priceHistory),
+                age: Date.now() - data.metrics.createdAt
+            }
+        }));
+
+        this.broadcastToUI({ type: 'stateUpdate', data: state });
     }
 
     handleTokenTrade(tokenMint, tradeEvent) {
