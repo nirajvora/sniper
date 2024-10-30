@@ -1,5 +1,5 @@
 export default class TokenTracker {
-    constructor() {
+    constructor(enableBroadcast = true) {
         this.activeTokens = new Map();
         this.pumpWs = null;
         this.broadcastToUI = null;
@@ -8,11 +8,13 @@ export default class TokenTracker {
         this.SOL_LIQUIDITY_THRESHOLD = 50; // SOL
         this.TRADE_COUNT_THRESHOLD = 20; // Number of trades
         this.TIME_WINDOW = 1000 * 60 * 60; // 1 hour in milliseconds
-
-        // Broadcast state periodically
-        setInterval(() => {
-            this.broadcastState();
-        }, 1000); // Update UI every second
+    
+        // Conditionally set up periodic broadcasting
+        if (enableBroadcast) {
+            setInterval(() => {
+                this.broadcastState();
+            }, 1000); // Update UI every second
+        }
     }
 
     async handleNewToken(tokenCreationEvent) {
