@@ -44,12 +44,6 @@ export default class TokenTracker {
                     }
                 });
 
-                console.log(`Started monitoring trades for token: ${tokenMint}`);
-                console.log('Initial bonding curve state:', {
-                    solLiquidity: tokenCreationEvent.vSolInBondingCurve,
-                    tokenSupply: tokenCreationEvent.vTokensInBondingCurve,
-                    marketCap: tokenCreationEvent.marketCapSol
-                });
             } catch (error) {
                 console.error(`Failed to subscribe to trades for token ${tokenMint}:`, error);
             }

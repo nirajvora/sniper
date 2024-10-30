@@ -73,6 +73,11 @@ ws.on('message', function message(data) {
         case 'sell':
             tt.handleTokenTrade(event.mint, event);
             break;
+        case undefined:
+            if (!event.message.startsWith("Success")) {
+              console.log('Undefined txType', event)
+            }
+            break;
         default:
             console.log('Unknown event type:', event);
     }
