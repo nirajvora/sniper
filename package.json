@@ -3,7 +3,7 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "start": "node src/wsConnection.js"
+    "start": "node server.js"
   },
   "dependencies": {
     "@solana/web3.js": "^1.87.6",
