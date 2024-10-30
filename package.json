@@ -1,12 +1,13 @@
 {
-    "name": "solana-price-monitor",
-    "private": true,
-    "type": "module",
-    "scripts": {
-      "start": "node monitor.js"
-    },
-    "dependencies": {
-      "@solana/web3.js": "^1.87.6",
-      "ws": "^8.14.2"
-    }
+  "name": "solana-price-monitor",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "start": "node src/wsConnection.js"
+  },
+  "dependencies": {
+    "@solana/web3.js": "^1.87.6",
+    "express": "^4.18.2",
+    "ws": "^8.14.2"
   }
+}
