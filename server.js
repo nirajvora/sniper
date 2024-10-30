@@ -46,7 +46,7 @@ const broadcastToUI = (data) => {
 tt.setBroadcastFunction(broadcastToUI);
 
 // Serve static files from UI build directory
-app.use(express.static(join(dirname(__dirname), 'ui/dist')));
+app.use(express.static(join(__dirname, 'ui/dist')));
 
 // Initialize PumpPortal connection
 const ws = new WebSocket('wss://pumpportal.fun/api/data');
