@@ -7,25 +7,22 @@ export default {
   ],
   theme: {
     extend: {
+      colors: {
+        background: '#F8FAFC',
+        surface: '#FFFFFF',
+        border: '#F1F5F9',
+        text: {
+          primary: '#334155',
+          secondary: '#64748B',
+          tertiary: '#94A3B8'
+        }
+      },
       boxShadow: {
-        'soft': '0 8px 30px rgb(0,0,0,0.05)',
-        'soft-hover': '0 8px 30px rgb(0,0,0,0.1)',
+        card: '0 0 50px 0 rgba(0,0,0,0.05)',
       },
-      animation: {
-        'gradient': 'gradient 8s linear infinite',
-      },
-      keyframes: {
-        gradient: {
-          '0%, 100%': {
-            'background-size': '200% 200%',
-            'background-position': 'left center'
-          },
-          '50%': {
-            'background-size': '200% 200%',
-            'background-position': 'right center'
-          },
-        },
-      },
+      borderRadius: {
+        '2xl': '1rem',
+      }
     },
   },
   plugins: [],
