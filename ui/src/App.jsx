@@ -20,7 +20,7 @@ function App() {
       ws.onmessage = (event) => {
         try {
           const message = JSON.parse(event.data);
-          console.log('Received message:', message); // Debug logging
+          // console.log('Received message:', message); // Debug logging
           
           switch(message.type) {
             case 'stateUpdate':
