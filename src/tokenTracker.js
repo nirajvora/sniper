@@ -109,22 +109,45 @@ export default class TokenTracker {
 
     broadcastState() {
         if (!this.broadcastToUI) return;
-
-        const state = Array.from(this.activeTokens.entries()).map(([mint, data]) => ({
-            mint,
-            symbol: data.creationEvent?.symbol || 'Unknown',
-            metrics: {
-                buyCount: data.metrics.buyCount,
-                sellCount: data.metrics.sellCount,
-                totalVolumeTokens: data.metrics.totalVolumeTokens,
-                uniqueTraders: data.metrics.uniqueTraders.size,
-                marketCap: data.metrics.highestMarketCap,
-                age: Date.now() - data.metrics.createdAt
-            }
-        }));
-
+    
+        const state = Array.from(this.activeTokens.entries()).map(([mint, data]) => {
+            const latestTrade = data.trades[data.trades.length - 1];
+            const currentMetrics = latestTrade ? {
+                price: latestTrade.marketCapSol / latestTrade.vTokensInBondingCurve,
+                marketCap: latestTrade.marketCapSol,
+                solLiquidity: latestTrade.vSolInBondingCurve
+            } : {
+                price: data.metrics.initialMarketCap / data.metrics.initialTokensInCurve,
+                marketCap: data.metrics.initialMarketCap,
+                solLiquidity: data.metrics.initialSolInCurve
+            };
+    
+            // Calculate 24h metrics
+            const oneDayAgo = Date.now() - (24 * 60 * 60 * 1000);
+            const dayTrades = data.trades.filter(t => t.timestamp > oneDayAgo);
+            
+            return {
+                mint,
+                symbol: data.creationEvent?.symbol || 'Unknown',
+                metrics: {
+                    buyCount: data.metrics.buyCount,
+                    sellCount: data.metrics.sellCount,
+                    totalVolumeTokens: data.metrics.totalVolumeTokens,
+                    totalVolumeSol: data.metrics.totalVolumeSol || 0,
+                    uniqueTraders: data.metrics.uniqueTraders.size,
+                    marketCap: currentMetrics.marketCap,
+                    solLiquidity: currentMetrics.solLiquidity,
+                    price: currentMetrics.price,
+                    priceGrowth: this.calculatePriceGrowth(data.metrics.priceHistory),
+                    age: Date.now() - data.metrics.createdAt,
+                    volume24h: this.calculate24hVolume(dayTrades),
+                    trades24h: dayTrades.length
+                }
+            };
+        });
+    
         this.broadcastToUI({ type: 'stateUpdate', data: state });
-    }
+    }    
 
     analyzeAndBroadcast() {
         const opportunities = [];
@@ -156,13 +179,19 @@ export default class TokenTracker {
     handleTokenTrade(tokenMint, tradeEvent) {
         const tokenData = this.activeTokens.get(tokenMint);
         if (!tokenData) return;
-
+    
+        // Add timestamp to trade event
+        const enrichedTradeEvent = {
+            ...tradeEvent,
+            timestamp: Date.now()  // Add this line
+        };
+    
         // Add trade to history
-        tokenData.trades.push(tradeEvent);
+        tokenData.trades.push(enrichedTradeEvent);
         
         // Update metrics
-        this.updateTokenMetrics(tokenMint, tradeEvent);
-
+        this.updateTokenMetrics(tokenMint, enrichedTradeEvent);
+    
         // Analyze after each trade
         this.analyzeTradingPattern(tokenMint);
     }
@@ -170,23 +199,37 @@ export default class TokenTracker {
     updateTokenMetrics(tokenMint, tradeEvent) {
         const tokenData = this.activeTokens.get(tokenMint);
         const metrics = tokenData.metrics;
-
+    
         // Update basic metrics
         metrics.lastUpdate = Date.now();
         metrics[tradeEvent.txType === 'buy' ? 'buyCount' : 'sellCount']++;
+        
+        // Update volume with SOL value consideration
+        const tradePrice = tradeEvent.marketCapSol / tradeEvent.vTokensInBondingCurve;
         metrics.totalVolumeTokens += tradeEvent.tokenAmount;
+        metrics.totalVolumeSol = (metrics.totalVolumeSol || 0) + (tradeEvent.tokenAmount * tradePrice);
+        
+        // Track unique traders
         metrics.uniqueTraders.add(tradeEvent.traderPublicKey);
-
+    
+        // Update liquidity tracking
+        metrics.currentSolInCurve = tradeEvent.vSolInBondingCurve;
+        metrics.currentTokensInCurve = tradeEvent.vTokensInBondingCurve;
+    
         // Update market cap tracking
+        metrics.currentMarketCap = tradeEvent.marketCapSol;
         metrics.highestMarketCap = Math.max(metrics.highestMarketCap, tradeEvent.marketCapSol);
         metrics.lowestMarketCap = Math.min(metrics.lowestMarketCap, tradeEvent.marketCapSol);
-
-        // Update price history
+    
+        // Update price history with more data points
         metrics.priceHistory.push({
             timestamp: Date.now(),
-            price: tradeEvent.marketCapSol / tradeEvent.vTokensInBondingCurve,
+            price: tradePrice,
             marketCap: tradeEvent.marketCapSol,
-            solLiquidity: tradeEvent.vSolInBondingCurve
+            solLiquidity: tradeEvent.vSolInBondingCurve,
+            tokenSupply: tradeEvent.vTokensInBondingCurve,
+            tradeAmount: tradeEvent.tokenAmount,
+            tradeType: tradeEvent.txType
         });
     }
 
@@ -210,6 +253,20 @@ export default class TokenTracker {
         }
         
         return analysis;
+    }
+
+    calculatePriceGrowth(priceHistory) {
+        if (priceHistory.length < 2) return 0;
+        const initialPrice = priceHistory[0].price;
+        const currentPrice = priceHistory[priceHistory.length - 1].price;
+        return ((currentPrice - initialPrice) / initialPrice) * 100;
+    }
+    
+    calculate24hVolume(trades) {
+        return trades.reduce((sum, trade) => {
+            const tradePrice = trade.marketCapSol / trade.vTokensInBondingCurve;
+            return sum + (trade.tokenAmount * tradePrice);
+        }, 0);
     }
 
     // Cleanup method for inactive tokens

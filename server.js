@@ -1,4 +1,3 @@
-// src/wsConnection.js
 import WebSocket from 'ws';
 import express from 'express';
 import { createServer } from 'http';
@@ -27,17 +26,48 @@ uiWss.on('connection', (ws) => {
     console.log('UI Client connected');
     uiClients.add(ws);
     
-    ws.on('close', () => {
-        console.log('UI Client disconnected');
+    // Add error handler
+    ws.on('error', (error) => {
+        console.error('UI WebSocket error:', error);
+    });
+    
+    // Add message handler to see if UI is sending anything
+    ws.on('message', (data) => {
+        console.log('Received message from UI:', data.toString());
+    });
+    
+    ws.on('close', (code, reason) => {
+        console.log('UI Client disconnected with code:', code, 'reason:', reason?.toString());
         uiClients.delete(ws);
     });
 });
 
 // Create broadcast function for UI updates
 const broadcastToUI = (data) => {
+    const sanitizedData = {
+        type: data.type,
+        data: Array.isArray(data.data) ? data.data.map(token => ({
+            mint: token.mint || '',
+            symbol: token.symbol || 'Unknown',
+            metrics: {
+                buyCount: Number(token.metrics?.buyCount) || 0,
+                sellCount: Number(token.metrics?.sellCount) || 0,
+                totalVolumeTokens: Number(token.metrics?.totalVolumeTokens) || 0,
+                uniqueTraders: token.metrics?.uniqueTraders || 0,
+                marketCap: Number(token.metrics?.marketCap) || 0,
+                age: token.metrics?.age || 0,
+                priceGrowth: Number(token.metrics?.priceGrowth) || 0 // Use the calculated value from TokenTracker
+            }
+        })) : []
+    };
+
     uiClients.forEach(client => {
         if (client.readyState === WebSocket.OPEN) {
-            client.send(JSON.stringify(data));
+            try {
+                client.send(JSON.stringify(sanitizedData));
+            } catch (error) {
+                console.error('Error broadcasting to UI:', error);
+            }
         }
     });
 };
@@ -63,23 +93,27 @@ ws.on('open', function open() {
 });
 
 ws.on('message', function message(data) {
-    const event = JSON.parse(data);
-    
-    switch (event.txType) {
-        case 'create':
-            tt.handleNewToken(event);
-            break;
-        case 'buy':
-        case 'sell':
-            tt.handleTokenTrade(event.mint, event);
-            break;
-        case undefined:
-            if (!event.message.startsWith("Success")) {
-              console.log('Undefined txType', event)
-            }
-            break;
-        default:
-            console.log('Unknown event type:', event);
+    try {
+        const event = JSON.parse(data);
+        
+        switch (event.txType) {
+            case 'create':
+                tt.handleNewToken(event);
+                break;
+            case 'buy':
+            case 'sell':
+                tt.handleTokenTrade(event.mint, event);
+                break;
+            case undefined:
+                if (!event.message?.startsWith("Success")) {
+                    console.log('Undefined txType', event)
+                }
+                break;
+            default:
+                console.log('Unknown event type:', event);
+        }
+    } catch (error) {
+        console.error('Error processing pump.fun message:', error);
     }
 });
 

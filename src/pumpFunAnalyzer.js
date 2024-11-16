@@ -110,59 +110,108 @@ export default class PumpFunAnalyzer {
             t.timestamp > Date.now() - this.TIME_WINDOW
         );
         
-        const currentPrice = token.metrics.priceHistory[token.metrics.priceHistory.length - 1]?.price || 0;
-        const initialPrice = token.metrics.priceHistory[0]?.price || 0;
+        // Get current values from most recent trade
+        const latestTrade = token.trades[token.trades.length - 1];
+        const currentLiquidity = latestTrade ? latestTrade.vSolInBondingCurve : token.metrics.initialSolInCurve;
+        const currentTokenSupply = latestTrade ? latestTrade.vTokensInBondingCurve : token.metrics.initialTokensInCurve;
+        
+        // Calculate price growth using bonding curve values
+        const currentPrice = latestTrade ? 
+            latestTrade.marketCapSol / latestTrade.vTokensInBondingCurve : 
+            token.metrics.initialMarketCap / token.metrics.initialTokensInCurve;
+            
+        const initialPrice = token.metrics.initialMarketCap / token.metrics.initialTokensInCurve;
         const priceGrowth = ((currentPrice - initialPrice) / initialPrice) * 100;
         
-        const recentPrices = token.metrics.priceHistory
-            .filter(p => p.timestamp > Date.now() - this.TIME_WINDOW)
-            .map(p => p.price);
+        // Calculate volume growth
+        const volumeGrowthRate = this.calculateVolumeGrowth(recentTrades);
         
-        const maxDrop = recentPrices.length > 1 ? 
-            Math.max(...recentPrices.map((p, i) => 
-                i > 0 ? ((recentPrices[i-1] - p) / recentPrices[i-1]) * 100 : 0
-            )) : 0;
+        // Calculate max price drop in recent window
+        const recentPrices = recentTrades.map(t => t.marketCapSol / t.vTokensInBondingCurve);
+        const maxDrop = this.calculateMaxDrop(recentPrices);
+        
+        // Buy pressure calculation including volume weighting
+        const buyPressure = this.calculateBuyPressure(recentTrades);
     
         return {
-            tokenSupply: token.metrics.totalVolumeTokens,
-            solLiquidity: token.metrics.initialSolInCurve,
-            buyPressure: token.metrics.buyCount / (token.metrics.buyCount + token.metrics.sellCount),
-            volumeGrowthRate: this.calculateVolumeGrowth(recentTrades),
+            tokenSupply: currentTokenSupply,
+            solLiquidity: currentLiquidity,
+            buyPressure,
+            volumeGrowthRate,
             recentTradeCount: recentTrades.length,
             uniqueHolders: token.metrics.uniqueTraders.size,
             priceGrowth,
             maxPriceDrop: maxDrop,
-            largestHolder: this.getLargestHolderShare(token)
+            largestHolder: this.getLargestHolderShare(token),
+            marketCap: latestTrade ? latestTrade.marketCapSol : token.metrics.initialMarketCap
         };
     }
-    
+
+    calculateBuyPressure(recentTrades) {
+        if (recentTrades.length === 0) return 0;
+        
+        let totalBuyVolume = 0;
+        let totalVolume = 0;
+        
+        recentTrades.forEach(trade => {
+            const volume = trade.tokenAmount;
+            if (trade.txType === 'buy') {
+                totalBuyVolume += volume;
+            }
+            totalVolume += volume;
+        });
+        
+        return totalVolume > 0 ? totalBuyVolume / totalVolume : 0;
+    }
+
+    calculateMaxDrop(prices) {
+        if (prices.length < 2) return 0;
+        
+        let maxDrop = 0;
+        for (let i = 1; i < prices.length; i++) {
+            const drop = ((prices[i-1] - prices[i]) / prices[i-1]) * 100;
+            maxDrop = Math.max(maxDrop, drop);
+        }
+        return maxDrop;
+    }
+
     calculateVolumeGrowth(recentTrades) {
         if (recentTrades.length < 2) return 0;
         
-        const halfwayPoint = Math.floor(recentTrades.length / 2);
-        const firstHalfVolume = recentTrades.slice(0, halfwayPoint)
-            .reduce((sum, trade) => sum + trade.tokenAmount, 0);
-        const secondHalfVolume = recentTrades.slice(halfwayPoint)
-            .reduce((sum, trade) => sum + trade.tokenAmount, 0);
+        // Split trades into time segments for better trend analysis
+        const midPoint = Math.floor(recentTrades.length / 2);
+        const firstHalf = recentTrades.slice(0, midPoint);
+        const secondHalf = recentTrades.slice(midPoint);
         
-        return ((secondHalfVolume - firstHalfVolume) / firstHalfVolume) * 100;
+        const firstHalfVolume = firstHalf.reduce((sum, trade) => 
+            sum + (trade.tokenAmount * (trade.marketCapSol / trade.vTokensInBondingCurve)), 0);
+        const secondHalfVolume = secondHalf.reduce((sum, trade) => 
+            sum + (trade.tokenAmount * (trade.marketCapSol / trade.vTokensInBondingCurve)), 0);
+        
+        return firstHalfVolume > 0 ? 
+            ((secondHalfVolume - firstHalfVolume) / firstHalfVolume) * 100 : 0;
     }
     
     getLargestHolderShare(token) {
-        // Simple approximation based on trades
         const holderBalances = new Map();
+        let totalSupply = token.metrics.initialTokensInCurve;
         
+        // Track both buys and sells with proper supply adjustments
         token.trades.forEach(trade => {
             const currentBalance = holderBalances.get(trade.traderPublicKey) || 0;
+            const tradeAmount = trade.tokenAmount;
+            
             if (trade.txType === 'buy') {
-                holderBalances.set(trade.traderPublicKey, currentBalance + trade.tokenAmount);
+                holderBalances.set(trade.traderPublicKey, currentBalance + tradeAmount);
+                totalSupply += tradeAmount;
             } else {
-                holderBalances.set(trade.traderPublicKey, currentBalance - trade.tokenAmount);
+                holderBalances.set(trade.traderPublicKey, currentBalance - tradeAmount);
+                totalSupply -= tradeAmount;
             }
         });
         
-        const maxBalance = Math.max(...holderBalances.values());
-        return maxBalance / token.metrics.totalVolumeTokens;
+        const maxBalance = Math.max(...Array.from(holderBalances.values()));
+        return totalSupply > 0 ? maxBalance / totalSupply : 0;
     }
     
     hasExcessiveHolderConcentration(metrics) {

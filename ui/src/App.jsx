@@ -1,27 +1,72 @@
-// ui/src/App.jsx
 import { useState, useEffect } from 'react'
 
 function App() {
   const [tokens, setTokens] = useState([]);
   const [status, setStatus] = useState('connecting');
+  const [error, setError] = useState(null);
 
   useEffect(() => {
-    const ws = new WebSocket(`ws://${window.location.host}`);
+    let ws;
     
-    ws.onopen = () => setStatus('connected');
-    ws.onmessage = (event) => {
-      const message = JSON.parse(event.data);
-      if (message.type === 'stateUpdate') {
-        setTokens(message.data);
-      }
-    };
-    ws.onclose = () => setStatus('disconnected');
-    ws.onerror = (error) => {
-      console.error('WebSocket error:', error);
-      setStatus('error');
+    const connect = () => {
+      ws = new WebSocket(`ws://${window.location.host}`);
+      
+      ws.onopen = () => {
+        console.log('WebSocket Connected');
+        setStatus('connected');
+        setError(null);
+      };
+
+      ws.onmessage = (event) => {
+        try {
+          const message = JSON.parse(event.data);
+          console.log('Received message:', message); // Debug logging
+          
+          switch(message.type) {
+            case 'stateUpdate':
+              setTokens(message.data || []);
+              break;
+            case 'tradingOpportunities':
+              // Handle trading opportunities if needed
+              console.log('Trading opportunities:', message.data);
+              break;
+            case 'newOpportunity':
+              // Handle new opportunities if needed
+              console.log('New opportunity:', message.data);
+              break;
+            default:
+              console.log('Unknown message type:', message.type);
+          }
+        } catch (err) {
+          console.error('Error processing message:', err);
+          setError(`Failed to process message: ${err.message}`);
+        }
+      };
+
+      ws.onclose = (event) => {
+        console.log(`WebSocket Disconnected, code: ${event.code}, reason: ${event.reason}`);
+        setStatus('disconnected');
+        // Try to reconnect after 3 seconds
+        setTimeout(() => {
+          console.log('Attempting to reconnect...');
+          connect();
+        }, 3000);
+      };
+
+      ws.onerror = (error) => {
+        console.error('WebSocket error:', error);
+        setError(`WebSocket error: ${error.message}`);
+      };
     };
 
-    return () => ws.close();
+    connect();
+
+    // Cleanup on component unmount
+    return () => {
+      if (ws) {
+        ws.close();
+      }
+    };
   }, []);
 
   return (
@@ -33,7 +78,13 @@ function App() {
           </h1>
           <p className="text-[#94A3B8]">
             Real-time analysis of token performance and metrics
+            {status !== 'connected' && ` (${status})`}
           </p>
+          {error && (
+            <p className="text-red-500 mt-2">
+              {error}
+            </p>
+          )}
         </header>
 
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
