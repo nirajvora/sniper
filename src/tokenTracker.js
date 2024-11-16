@@ -1,19 +1,23 @@
+import PumpFunAnalyzer from './pumpFunAnalyzer.js';
+
 export default class TokenTracker {
     constructor(enableBroadcast = true) {
         this.activeTokens = new Map();
         this.pumpWs = null;
         this.broadcastToUI = null;
-        // Thresholds for analysis
-        this.VOLUME_THRESHOLD = 1000000; // Example token amount
-        this.SOL_LIQUIDITY_THRESHOLD = 50; // SOL
-        this.TRADE_COUNT_THRESHOLD = 20; // Number of trades
-        this.TIME_WINDOW = 1000 * 60 * 60; // 1 hour in milliseconds
+        this.analyzer = new PumpFunAnalyzer();
+        this.tradingOpportunities = new Map();
+        this.TIME_WINDOW = 1000 * 60 * 60;
     
         // Conditionally set up periodic broadcasting
         if (enableBroadcast) {
             setInterval(() => {
                 this.broadcastState();
             }, 1000); // Update UI every second
+
+            setInterval(() => {
+                this.analyzeAndBroadcast();
+            }, 5000);
         }
     }
 
@@ -105,123 +109,164 @@ export default class TokenTracker {
 
     broadcastState() {
         if (!this.broadcastToUI) return;
-
-        const state = Array.from(this.activeTokens.entries()).map(([mint, data]) => ({
-            mint,
-            symbol: data.creationEvent?.symbol || 'Unknown',
-            metrics: {
-                buyCount: data.metrics.buyCount,
-                sellCount: data.metrics.sellCount,
-                totalVolumeTokens: data.metrics.totalVolumeTokens,
-                uniqueTraders: data.metrics.uniqueTraders.size,
-                marketCap: data.metrics.highestMarketCap,
-                priceGrowth: this.calculatePriceGrowth(data.metrics.priceHistory),
-                age: Date.now() - data.metrics.createdAt
-            }
-        }));
-
+    
+        const state = Array.from(this.activeTokens.entries()).map(([mint, data]) => {
+            const latestTrade = data.trades[data.trades.length - 1];
+            const currentMetrics = latestTrade ? {
+                price: latestTrade.marketCapSol / latestTrade.vTokensInBondingCurve,
+                marketCap: latestTrade.marketCapSol,
+                solLiquidity: latestTrade.vSolInBondingCurve
+            } : {
+                price: data.metrics.initialMarketCap / data.metrics.initialTokensInCurve,
+                marketCap: data.metrics.initialMarketCap,
+                solLiquidity: data.metrics.initialSolInCurve
+            };
+    
+            // Calculate 24h metrics
+            const oneDayAgo = Date.now() - (24 * 60 * 60 * 1000);
+            const dayTrades = data.trades.filter(t => t.timestamp > oneDayAgo);
+            
+            return {
+                mint,
+                symbol: data.creationEvent?.symbol || 'Unknown',
+                metrics: {
+                    buyCount: data.metrics.buyCount,
+                    sellCount: data.metrics.sellCount,
+                    totalVolumeTokens: data.metrics.totalVolumeTokens,
+                    totalVolumeSol: data.metrics.totalVolumeSol || 0,
+                    uniqueTraders: data.metrics.uniqueTraders.size,
+                    marketCap: currentMetrics.marketCap,
+                    solLiquidity: currentMetrics.solLiquidity,
+                    price: currentMetrics.price,
+                    priceGrowth: this.calculatePriceGrowth(data.metrics.priceHistory),
+                    age: Date.now() - data.metrics.createdAt,
+                    volume24h: this.calculate24hVolume(dayTrades),
+                    trades24h: dayTrades.length
+                }
+            };
+        });
+    
         this.broadcastToUI({ type: 'stateUpdate', data: state });
+    }    
+
+    analyzeAndBroadcast() {
+        const opportunities = [];
+        
+        for (const [mint, tokenData] of this.activeTokens.entries()) {
+            const analysis = this.analyzer.analyzeToken(tokenData);
+            
+            // Store/update analysis result
+            this.tradingOpportunities.set(mint, analysis);
+            
+            if (analysis.isOpportunity) {
+                opportunities.push({
+                    mint,
+                    symbol: tokenData.symbol,
+                    ...analysis
+                });
+            }
+        }
+    
+        // Broadcast if we have opportunities
+        if (opportunities.length > 0 && this.broadcastToUI) {
+            this.broadcastToUI({
+                type: 'tradingOpportunities',
+                data: opportunities
+            });
+        }
     }
 
     handleTokenTrade(tokenMint, tradeEvent) {
         const tokenData = this.activeTokens.get(tokenMint);
         if (!tokenData) return;
-
+    
+        // Add timestamp to trade event
+        const enrichedTradeEvent = {
+            ...tradeEvent,
+            timestamp: Date.now()  // Add this line
+        };
+    
         // Add trade to history
-        tokenData.trades.push(tradeEvent);
+        tokenData.trades.push(enrichedTradeEvent);
         
         // Update metrics
-        this.updateTokenMetrics(tokenMint, tradeEvent);
-
+        this.updateTokenMetrics(tokenMint, enrichedTradeEvent);
+    
         // Analyze after each trade
-        const analysis = this.analyzeTradingPattern(tokenMint);
-        if (analysis.strongSignals) {
-            console.log(`Strong listing signals detected for ${tokenMint}:`, analysis);
-        }
+        this.analyzeTradingPattern(tokenMint);
     }
 
     updateTokenMetrics(tokenMint, tradeEvent) {
         const tokenData = this.activeTokens.get(tokenMint);
         const metrics = tokenData.metrics;
-
+    
         // Update basic metrics
         metrics.lastUpdate = Date.now();
         metrics[tradeEvent.txType === 'buy' ? 'buyCount' : 'sellCount']++;
+        
+        // Update volume with SOL value consideration
+        const tradePrice = tradeEvent.marketCapSol / tradeEvent.vTokensInBondingCurve;
         metrics.totalVolumeTokens += tradeEvent.tokenAmount;
+        metrics.totalVolumeSol = (metrics.totalVolumeSol || 0) + (tradeEvent.tokenAmount * tradePrice);
+        
+        // Track unique traders
         metrics.uniqueTraders.add(tradeEvent.traderPublicKey);
-
+    
+        // Update liquidity tracking
+        metrics.currentSolInCurve = tradeEvent.vSolInBondingCurve;
+        metrics.currentTokensInCurve = tradeEvent.vTokensInBondingCurve;
+    
         // Update market cap tracking
+        metrics.currentMarketCap = tradeEvent.marketCapSol;
         metrics.highestMarketCap = Math.max(metrics.highestMarketCap, tradeEvent.marketCapSol);
         metrics.lowestMarketCap = Math.min(metrics.lowestMarketCap, tradeEvent.marketCapSol);
-
-        // Calculate implied price and add to price history
-        const impliedPrice = tradeEvent.marketCapSol / tradeEvent.vTokensInBondingCurve;
+    
+        // Update price history with more data points
         metrics.priceHistory.push({
             timestamp: Date.now(),
-            price: impliedPrice,
+            price: tradePrice,
             marketCap: tradeEvent.marketCapSol,
-            solLiquidity: tradeEvent.vSolInBondingCurve
+            solLiquidity: tradeEvent.vSolInBondingCurve,
+            tokenSupply: tradeEvent.vTokensInBondingCurve,
+            tradeAmount: tradeEvent.tokenAmount,
+            tradeType: tradeEvent.txType
         });
     }
 
     analyzeTradingPattern(tokenMint) {
         const tokenData = this.activeTokens.get(tokenMint);
-        const metrics = tokenData.metrics;
-        const recentTrades = this.getRecentTrades(tokenData.trades);
-
-        // Calculate key metrics
-        const timeElapsed = Date.now() - metrics.createdAt;
-        const recentVolume = this.calculateRecentVolume(recentTrades);
-        const buyPressure = metrics.buyCount / (metrics.buyCount + metrics.sellCount);
-        const priceGrowth = this.calculatePriceGrowth(metrics.priceHistory);
-        const liquidityGrowth = (recentTrades[0]?.vSolInBondingCurve || 0) - metrics.initialSolInCurve;
-        const uniqueTraderGrowth = metrics.uniqueTraders.size;
-
-        // Market cap momentum
-        const marketCapGrowth = ((metrics.highestMarketCap - metrics.initialMarketCap) / metrics.initialMarketCap) * 100;
-
-        // Define signal strengths
-        const signals = {
-            strongVolume: recentVolume > this.VOLUME_THRESHOLD,
-            highBuyPressure: buyPressure > 0.7,
-            significantLiquidity: liquidityGrowth > this.SOL_LIQUIDITY_THRESHOLD,
-            sustainedGrowth: priceGrowth > 20, // 20% growth
-            activeTraders: uniqueTraderGrowth > 50,
-            marketCapMomentum: marketCapGrowth > 100 // 100% growth
-        };
-
-        // Determine if signals are strong enough to suggest listing
-        const strongSignals = Object.values(signals).filter(Boolean).length >= 4;
-
-        return {
-            strongSignals,
-            signals,
-            metrics: {
-                timeElapsed,
-                recentVolume,
-                buyPressure,
-                priceGrowth,
-                liquidityGrowth,
-                uniqueTraderGrowth,
-                marketCapGrowth
-            }
-        };
-    }
-
-    getRecentTrades(trades) {
-        const cutoffTime = Date.now() - this.TIME_WINDOW;
-        return trades.filter(trade => trade.timestamp > cutoffTime);
-    }
-
-    calculateRecentVolume(trades) {
-        return trades.reduce((sum, trade) => sum + trade.tokenAmount, 0);
+        const analysis = this.analyzer.analyzeToken(tokenData);
+        
+        // Store the analysis result
+        this.tradingOpportunities.set(tokenMint, analysis);
+        
+        // If this is a new opportunity, broadcast immediately
+        if (analysis.isOpportunity && this.broadcastToUI) {
+            this.broadcastToUI({
+                type: 'newOpportunity',
+                data: {
+                    mint: tokenMint,
+                    symbol: tokenData.symbol,
+                    ...analysis
+                }
+            });
+        }
+        
+        return analysis;
     }
 
     calculatePriceGrowth(priceHistory) {
         if (priceHistory.length < 2) return 0;
-        const initial = priceHistory[0].price;
-        const current = priceHistory[priceHistory.length - 1].price;
-        return ((current - initial) / initial) * 100;
+        const initialPrice = priceHistory[0].price;
+        const currentPrice = priceHistory[priceHistory.length - 1].price;
+        return ((currentPrice - initialPrice) / initialPrice) * 100;
+    }
+    
+    calculate24hVolume(trades) {
+        return trades.reduce((sum, trade) => {
+            const tradePrice = trade.marketCapSol / trade.vTokensInBondingCurve;
+            return sum + (trade.tokenAmount * tradePrice);
+        }, 0);
     }
 
     // Cleanup method for inactive tokens
@@ -229,11 +274,11 @@ export default class TokenTracker {
         const now = Date.now();
         for (const [tokenMint, tokenData] of this.activeTokens.entries()) {
             if (now - tokenData.metrics.lastUpdate > maxAge) {
-                // Unsubscribe from token trades
-                if (tokenData.subscription && tokenData.subscription.unsubscribe) {
+                if (tokenData.subscription?.unsubscribe) {
                     tokenData.subscription.unsubscribe();
                 }
                 this.activeTokens.delete(tokenMint);
+                this.tradingOpportunities.delete(tokenMint); // Add this line
                 console.log(`Stopped monitoring inactive token: ${tokenMint}`);
             }
         }
